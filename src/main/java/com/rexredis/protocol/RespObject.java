@@ -49,4 +49,8 @@ public sealed interface RespObject {
     static RespObject nullArray() {
         return new ArrayResp(null);
     }
+
+    static RespObject wrongType() {
+        return new Error("WRONGTYPE Operation against a key holding the wrong kind of value");
+    }
 }

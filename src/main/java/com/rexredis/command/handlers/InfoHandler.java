@@ -4,11 +4,44 @@ import com.rexredis.command.Command;
 import com.rexredis.protocol.RespObject;
 import com.rexredis.store.DataStore;
 
-/** INFO — returns server information */
+import java.lang.management.ManagementFactory;
+
+/**
+ * Handles INFO command.
+ */
 public class InfoHandler implements CommandHandler {
+
+    private final long startTime = System.currentTimeMillis();
+
     @Override
     public RespObject handle(Command cmd, DataStore store) {
-        // TODO: Return server info (version, uptime, connected clients, memory, keyspace)
-        return RespObject.bulkString("# Server\r\nrex_redis_version:1.0.0\r\n");
+        long uptimeSeconds = (System.currentTimeMillis() - startTime) / 1000;
+        long totalMemory = Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory();
+        int keysCount = store.size();
+        int expiresCount = store.getExpiryManager().getAllExpiries().size();
+
+        String info = """
+                # Server
+                redis_version:7.0.0-rexredis
+                rexredis_version:1.0.0
+                os_name:%s
+                process_id:%s
+                uptime_in_seconds:%d
+                
+                # Memory
+                used_memory:%d
+                
+                # Keyspace
+                db0:keys=%d,expires=%d
+                """.formatted(
+                System.getProperty("os.name"),
+                ManagementFactory.getRuntimeMXBean().getName().split("@")[0],
+                uptimeSeconds,
+                totalMemory,
+                keysCount,
+                expiresCount
+        );
+
+        return RespObject.bulkString(info);
     }
 }

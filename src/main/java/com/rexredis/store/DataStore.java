@@ -1,5 +1,6 @@
 package com.rexredis.store;
 
+import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -23,6 +24,7 @@ public class DataStore {
     }
 
     public void set(String key, RedisValue value) {
+        expiryManager.removeExpiry(key);
         store.put(key, value);
     }
 
@@ -41,11 +43,17 @@ public class DataStore {
     }
 
     public Set<String> keys() {
-        return store.keySet();
+        Set<String> activeKeys = new HashSet<>();
+        for (String key : store.keySet()) {
+            if (exists(key)) {
+                activeKeys.add(key);
+            }
+        }
+        return activeKeys;
     }
 
     public int size() {
-        return store.size();
+        return keys().size();
     }
 
     public void clear() {

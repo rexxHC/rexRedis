@@ -13,9 +13,25 @@ public class ServerConfig {
     private boolean persistenceEnabled;
 
     public ServerConfig() {
-        this.port = DEFAULT_PORT;
+        this(DEFAULT_PORT);
+    }
+
+    public ServerConfig(int port) {
+        this.port = port;
         this.rdbFilename = DEFAULT_RDB_FILENAME;
         this.persistenceEnabled = true;
+    }
+
+    public void setPort(int port) {
+        this.port = port;
+    }
+
+    public void setRdbFilename(String rdbFilename) {
+        this.rdbFilename = rdbFilename;
+    }
+
+    public void setPersistenceEnabled(boolean persistenceEnabled) {
+        this.persistenceEnabled = persistenceEnabled;
     }
 
     /**
