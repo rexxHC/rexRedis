@@ -44,7 +44,8 @@ public class ClientHandler {
     private static final int MAX_WRITE_QUEUE_BYTES = 32 * 1024 * 1024;
 
     /** Tracks the total queued bytes awaiting write. */
-    private volatile long queuedBytes = 0;
+    private final java.util.concurrent.atomic.AtomicLong queuedBytes = new java.util.concurrent.atomic.AtomicLong(0);
+    private volatile boolean closeAfterFlush = false;
 
     private final SocketChannel channel;
     private final SelectionKey selectionKey;
@@ -92,13 +93,13 @@ public class ClientHandler {
         // Decode all complete messages in the buffer
         try {
             RespObject obj;
-            while ((obj = decoder.decode(readBuffer)) != null) {
+            while (readBuffer.remaining() >= decoder.getRequiredBytes() && (obj = decoder.decode(readBuffer)) != null) {
                 processMessage(obj);
             }
         } catch (IllegalArgumentException e) {
             logger.warn("Protocol error from client: {}", e.getMessage());
             sendResponse(RespObject.error("ERR Protocol error: " + e.getMessage()));
-            throw new IOException("Protocol error, closing client", e);
+            closeAfterFlush = true;
         }
 
         // Compact: move unread bytes to the start, switch back to write mode
@@ -128,11 +129,15 @@ public class ClientHandler {
 
             byte[] data = writeQueue.poll();
             if (data == null) {
+                if (closeAfterFlush) {
+                    close();
+                    return;
+                }
                 selectionKey.interestOps(SelectionKey.OP_READ);
                 return;
             }
 
-            queuedBytes -= data.length;
+            queuedBytes.addAndGet(-data.length);
 
             currentWriteBuffer = ByteBuffer.wrap(data);
             channel.write(currentWriteBuffer);
@@ -171,9 +176,9 @@ public class ClientHandler {
      */
     public synchronized void sendResponse(RespObject response) {
         byte[] encoded = encoder.encode(response);
-        queuedBytes += encoded.length;
-        if (queuedBytes > MAX_WRITE_QUEUE_BYTES) {
-            logger.warn("Client write queue exceeded limit ({} bytes), closing", queuedBytes);
+        queuedBytes.addAndGet(encoded.length);
+        if (queuedBytes.get() > MAX_WRITE_QUEUE_BYTES) {
+            logger.warn("Client write queue exceeded limit ({} bytes), closing", queuedBytes.get());
             close();
             return;
         }

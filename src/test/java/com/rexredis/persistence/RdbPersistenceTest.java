@@ -114,4 +114,19 @@ class RdbPersistenceTest {
                 .isInstanceOf(IOException.class)
                 .hasMessageContaining("missing EOF marker");
     }
+
+    @Test
+    void testKeyExpiringMidSaveNotLoaded(@TempDir Path tempDir) throws IOException, InterruptedException {
+        Path rdbPath = tempDir.resolve("dump_mid_expire.rdb");
+
+        sourceStore.set("k1", RedisValue.string("v1"));
+        sourceStore.getExpiryManager().setExpiry("k1", 200);
+
+        saver.save(sourceStore, rdbPath.toString());
+
+        Thread.sleep(300);
+
+        loader.load(rdbPath.toString(), restoredStore);
+        assertThat(restoredStore.exists("k1")).isFalse();
+    }
 }

@@ -34,3 +34,5 @@ dependency-reduced-pom.xml
 # OS generated
 .DS_Store
 Thumbs.db
+*.rdb
+*.rdb.tmp

@@ -36,9 +36,15 @@ public class RdbLoader {
 
         try (InputStream fis = Files.newInputStream(path);
              BufferedInputStream bis = new BufferedInputStream(fis);
-             DataInputStream dis = new DataInputStream(bis)) {
+             java.util.zip.CheckedInputStream cis = new java.util.zip.CheckedInputStream(bis, new java.util.zip.CRC32());
+             DataInputStream dis = new DataInputStream(cis)) {
 
             readSnapshot(dis, store);
+            long calculatedCrc = cis.getChecksum().getValue();
+            long expectedCrc = dis.readLong();
+            if (calculatedCrc != expectedCrc) {
+                throw new IOException("RDB file corrupted (CRC mismatch)");
+            }
         }
     }
 
@@ -83,7 +89,7 @@ public class RdbLoader {
                     if (count < 0 || count > MAX_COLLECTION_SIZE) {
                         throw new IOException("Invalid list count in RDB: " + count);
                     }
-                    List<String> list = new ArrayList<>(count);
+                    List<String> list = new ArrayList<>(Math.min(count, 1024));
                     for (int j = 0; j < count; j++) {
                         list.add(readString(dis));
                     }
@@ -94,7 +100,7 @@ public class RdbLoader {
                     if (count < 0 || count > MAX_COLLECTION_SIZE) {
                         throw new IOException("Invalid set count in RDB: " + count);
                     }
-                    Set<String> set = new LinkedHashSet<>(count);
+                    Set<String> set = new LinkedHashSet<>(Math.min(count, 1024));
                     for (int j = 0; j < count; j++) {
                         set.add(readString(dis));
                     }
@@ -105,7 +111,7 @@ public class RdbLoader {
                     if (count < 0 || count > MAX_COLLECTION_SIZE) {
                         throw new IOException("Invalid hash count in RDB: " + count);
                     }
-                    Map<String, String> map = new LinkedHashMap<>(count);
+                    Map<String, String> map = new LinkedHashMap<>(Math.min(count, 1024));
                     for (int j = 0; j < count; j++) {
                         String field = readString(dis);
                         String value = readString(dis);

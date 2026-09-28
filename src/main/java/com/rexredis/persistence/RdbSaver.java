@@ -58,9 +58,11 @@ public class RdbSaver {
 
         try (OutputStream fos = Files.newOutputStream(tempPath);
              BufferedOutputStream bos = new BufferedOutputStream(fos);
-             DataOutputStream dos = new DataOutputStream(bos)) {
+             java.util.zip.CheckedOutputStream cos = new java.util.zip.CheckedOutputStream(bos, new java.util.zip.CRC32());
+             DataOutputStream dos = new DataOutputStream(cos)) {
 
             writeSnapshot(store, dos);
+            dos.writeLong(cos.getChecksum().getValue());
             dos.flush();
         }
 

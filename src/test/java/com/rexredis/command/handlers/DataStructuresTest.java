@@ -152,4 +152,17 @@ class DataStructuresTest {
                 .isEqualTo(RespObject.ok());
         assertThat(dataStore.size()).isEqualTo(0);
     }
+
+    @Test
+    void testKeysGlobMatching() {
+        dataStore.set("a?x", com.rexredis.store.RedisValue.string("1"));
+        dataStore.set("abx", com.rexredis.store.RedisValue.string("2"));
+        dataStore.set("a\\x", com.rexredis.store.RedisValue.string("3"));
+
+        RespObject res = keysHandler.handle(new Command("KEYS", List.of("*\\?x")), dataStore);
+        assertThat(res).isInstanceOf(RespObject.ArrayResp.class);
+        List<RespObject> elements = ((RespObject.ArrayResp) res).elements();
+        assertThat(elements).hasSize(1);
+        assertThat(((RespObject.BulkString) elements.get(0)).value()).isEqualTo("a?x");
+    }
 }

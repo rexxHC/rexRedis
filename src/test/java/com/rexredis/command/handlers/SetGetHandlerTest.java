@@ -141,4 +141,16 @@ class SetGetHandlerTest {
         RespObject res = getHandler.handle(new Command("GET", List.of("listKey")), dataStore);
         assertThat(res).isEqualTo(RespObject.wrongType());
     }
+
+    @Test
+    void testIncrPreservesTtl() {
+        setHandler.handle(new Command("SET", List.of("ttlKey", "10")), dataStore);
+        dataStore.getExpiryManager().setExpiry("ttlKey", 100_000);
+
+        RespObject res = incrHandler.handle(new Command("INCR", List.of("ttlKey")), dataStore);
+        assertThat(res).isEqualTo(RespObject.integer(11));
+
+        assertThat(dataStore.getExpiryManager().hasExpiry("ttlKey")).isTrue();
+        assertThat(dataStore.getExpiryManager().ttlMillis("ttlKey")).isGreaterThan(0);
+    }
 }

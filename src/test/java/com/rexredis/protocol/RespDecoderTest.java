@@ -163,4 +163,18 @@ class RespDecoderTest {
 
         assertThat(buf.hasRemaining()).isFalse();
     }
+
+    @Test
+    void testArrayExceedingDepthLimitThrowsException() {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < 17; i++) {
+            sb.append("*1\r\n");
+        }
+        sb.append("$4\r\nping\r\n");
+
+        ByteBuffer buf = toBuffer(sb.toString());
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> decoder.decode(buf))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Exceeded maximum nesting depth");
+    }
 }

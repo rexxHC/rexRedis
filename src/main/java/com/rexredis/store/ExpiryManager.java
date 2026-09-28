@@ -15,12 +15,18 @@ public class ExpiryManager {
 
     /** key → absolute expiry time in milliseconds since epoch */
     private final Map<String, Long> expiries = new HashMap<>();
+    private final java.util.ArrayList<String> keyList = new java.util.ArrayList<>();
+    private final java.util.Map<String, Integer> idx = new java.util.HashMap<>();
 
     public void setExpiry(String key, long ttlMillis) {
         setAbsoluteExpiry(key, System.currentTimeMillis() + ttlMillis);
     }
 
     public void setAbsoluteExpiry(String key, long timestampMillis) {
+        if (!expiries.containsKey(key)) {
+            idx.put(key, keyList.size());
+            keyList.add(key);
+        }
         expiries.put(key, timestampMillis);
     }
 
@@ -75,7 +81,18 @@ public class ExpiryManager {
     }
 
     public boolean removeExpiry(String key) {
-        return expiries.remove(key) != null;
+        if (expiries.remove(key) != null) {
+            int removeIdx = idx.remove(key);
+            int lastIdx = keyList.size() - 1;
+            if (removeIdx != lastIdx) {
+                String lastKey = keyList.get(lastIdx);
+                keyList.set(removeIdx, lastKey);
+                idx.put(lastKey, removeIdx);
+            }
+            keyList.remove(lastIdx);
+            return true;
+        }
+        return false;
     }
 
     public boolean hasExpiry(String key) {
@@ -92,6 +109,8 @@ public class ExpiryManager {
 
     public void clear() {
         expiries.clear();
+        keyList.clear();
+        idx.clear();
     }
 
     /**
@@ -99,29 +118,21 @@ public class ExpiryManager {
      * Uses random index sampling instead of copying/shuffling the full key set.
      */
     public void activeExpiryCycle(DataStore store) {
-        if (expiries.isEmpty()) {
+        if (keyList.isEmpty()) {
             return;
         }
 
         for (int loop = 0; loop < ACTIVE_EXPIRE_MAX_LOOPS; loop++) {
-            // Take a snapshot of keys as an array for random access
-            Object[] keyArray = expiries.keySet().toArray();
-            if (keyArray.length == 0) {
+            if (keyList.isEmpty()) {
                 break;
             }
 
-            int countToSample = Math.min(keyArray.length, ACTIVE_EXPIRE_KEYS_PER_LOOP);
+            int countToSample = Math.min(keyList.size(), ACTIVE_EXPIRE_KEYS_PER_LOOP);
             int expiredCount = 0;
             java.util.concurrent.ThreadLocalRandom rng = java.util.concurrent.ThreadLocalRandom.current();
 
-            // Use Fisher-Yates partial shuffle to pick countToSample unique random keys
             for (int i = 0; i < countToSample; i++) {
-                int j = rng.nextInt(i, keyArray.length);
-                Object tmp = keyArray[i];
-                keyArray[i] = keyArray[j];
-                keyArray[j] = tmp;
-
-                String key = (String) keyArray[i];
+                String key = keyList.get(rng.nextInt(keyList.size()));
                 if (isExpired(key)) {
                     store.delete(key);
                     expiredCount++;

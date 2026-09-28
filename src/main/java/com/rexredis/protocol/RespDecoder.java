@@ -28,6 +28,15 @@ public class RespDecoder {
     private static final int MAX_BULK_STRING_LENGTH = 512 * 1024 * 1024;
     /** Maximum array element count */
     private static final int MAX_ARRAY_COUNT = 1_048_576;
+    private static final int MAX_DEPTH = 16;
+
+    private int requiredBytes = 0;
+    public int getRequiredBytes() { return requiredBytes; }
+
+    private static class MissingBytesException extends RuntimeException {
+        final int missing;
+        MissingBytesException(int missing) { this.missing = missing; }
+    }
 
     /**
      * Attempts to decode the next complete RespObject from the buffer.
@@ -38,33 +47,33 @@ public class RespDecoder {
      * @throws IllegalArgumentException if the data contains an unknown RESP type prefix
      */
     public RespObject decode(ByteBuffer buffer) {
-        if (!buffer.hasRemaining()) {
-            return null;
-        }
-
-        // TODO Bug 12: This decoder re-parses from the start on every partial read.
-        // A large payload arriving in small chunks costs O(n²) total work.
-        // Fix: refactor to a state-machine parser that remembers its position,
-        // or check that the full frame length is available before parsing.
-
+        if (!buffer.hasRemaining()) return null;
         int savedPosition = buffer.position();
+        requiredBytes = 0;
         try {
-            return doDecode(buffer);
+            return doDecode(buffer, 0);
         } catch (BufferUnderflowException e) {
-            // Incomplete message — rewind so the caller can accumulate more data
+            requiredBytes = 1;
+            buffer.position(savedPosition);
+            return null;
+        } catch (MissingBytesException e) {
+            requiredBytes = (buffer.limit() - savedPosition) + e.missing;
             buffer.position(savedPosition);
             return null;
         }
     }
 
-    private RespObject doDecode(ByteBuffer buffer) {
+    private RespObject doDecode(ByteBuffer buffer, int depth) {
+        if (depth > MAX_DEPTH) {
+            throw new IllegalArgumentException("Exceeded maximum nesting depth");
+        }
         byte prefix = readByte(buffer);
         return switch (prefix) {
             case '+' -> decodeSimpleString(buffer);
             case '-' -> decodeError(buffer);
             case ':' -> decodeInteger(buffer);
             case '$' -> decodeBulkString(buffer);
-            case '*' -> decodeArray(buffer);
+            case '*' -> decodeArray(buffer, depth);
             default -> throw new IllegalArgumentException(
                     "Unknown RESP type prefix: '" + (char) prefix + "' (0x" + Integer.toHexString(prefix) + ")");
         };
@@ -109,7 +118,7 @@ public class RespDecoder {
 
         // Read exactly 'length' bytes
         if (buffer.remaining() < length + 2) {  // +2 for trailing \r\n
-            throw new BufferUnderflowException();
+            throw new MissingBytesException(length + 2 - buffer.remaining());
         }
 
         byte[] data = new byte[length];
@@ -127,7 +136,7 @@ public class RespDecoder {
 
     // ── Array: *2\r\n$3\r\nGET\r\n$4\r\nname\r\n  or  *-1\r\n (null) ──
 
-    private RespObject decodeArray(ByteBuffer buffer) {
+    private RespObject decodeArray(ByteBuffer buffer, int depth) {
         String countLine = readLine(buffer);
         int count = Integer.parseInt(countLine);
 
@@ -145,7 +154,7 @@ public class RespDecoder {
 
         List<RespObject> elements = new ArrayList<>(count);
         for (int i = 0; i < count; i++) {
-            elements.add(doDecode(buffer));  // recursive — arrays can be nested
+            elements.add(doDecode(buffer, depth + 1));  // recursive — arrays can be nested
         }
 
         return new RespObject.ArrayResp(elements);

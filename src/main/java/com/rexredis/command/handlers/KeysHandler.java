@@ -75,11 +75,15 @@ public class KeysHandler implements CommandHandler {
 
         while (ti < text.length()) {
             if (pi < pattern.length() && pattern.charAt(pi) == '\\' && pi + 1 < pattern.length()) {
-                // Escaped character — match literally
-                pi++;
-                if (text.charAt(ti) != pattern.charAt(pi)) return false;
-                pi++;
-                ti++;
+                if (text.charAt(ti) == pattern.charAt(pi + 1)) {
+                    pi += 2;
+                    ti++;
+                } else if (starPi >= 0) {
+                    pi = starPi;
+                    ti = ++starTi;
+                } else {
+                    return false;
+                }
             } else if (pi < pattern.length() && pattern.charAt(pi) == '?') {
                 pi++;
                 ti++;
@@ -91,9 +95,15 @@ public class KeysHandler implements CommandHandler {
                 int close = pattern.indexOf(']', pi + 1);
                 if (close < 0) {
                     // No closing bracket — treat '[' as literal
-                    if (text.charAt(ti) != '[') return false;
-                    pi++;
-                    ti++;
+                    if (text.charAt(ti) == '[') {
+                        pi++;
+                        ti++;
+                    } else if (starPi >= 0) {
+                        pi = starPi;
+                        ti = ++starTi;
+                    } else {
+                        return false;
+                    }
                 } else {
                     boolean negate = (pi + 1 < close && pattern.charAt(pi + 1) == '^');
                     int rangeStart = negate ? pi + 2 : pi + 1;
