@@ -43,9 +43,12 @@ public class IncrHandler implements CommandHandler {
                     return RespObject.error("ERR wrong number of arguments for 'decrby' command");
                 }
                 try {
-                    step = -Long.parseLong(cmd.arg(1));
+                    long parsed = Long.parseLong(cmd.arg(1));
+                    step = Math.negateExact(parsed);
                 } catch (NumberFormatException e) {
                     return RespObject.error("ERR value is not an integer or out of range");
+                } catch (ArithmeticException e) {
+                    return RespObject.error("ERR increment or decrement would overflow");
                 }
             }
             default -> {
@@ -68,8 +71,19 @@ public class IncrHandler implements CommandHandler {
             }
         }
 
-        long result = currentNum + step;
-        store.set(key, RedisValue.string(Long.toString(result)));
+        long result;
+        try {
+            result = Math.addExact(currentNum, step);
+        } catch (ArithmeticException e) {
+            return RespObject.error("ERR increment or decrement would overflow");
+        }
+
+        // Mutate in-place to preserve TTL when key already exists
+        if (currentVal != null) {
+            currentVal.setValue(Long.toString(result));
+        } else {
+            store.set(key, RedisValue.string(Long.toString(result)));
+        }
 
         return RespObject.integer(result);
     }

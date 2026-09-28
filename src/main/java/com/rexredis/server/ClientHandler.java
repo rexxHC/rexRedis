@@ -38,6 +38,13 @@ public class ClientHandler {
 
     private static final Logger logger = LoggerFactory.getLogger(ClientHandler.class);
     private static final int READ_BUFFER_SIZE = 4096;
+    /** Maximum read buffer size: 1 GB */
+    private static final int MAX_READ_BUFFER_SIZE = 1024 * 1024 * 1024;
+    /** Maximum queued output bytes per client: 32 MB */
+    private static final int MAX_WRITE_QUEUE_BYTES = 32 * 1024 * 1024;
+
+    /** Tracks the total queued bytes awaiting write. */
+    private volatile long queuedBytes = 0;
 
     private final SocketChannel channel;
     private final SelectionKey selectionKey;
@@ -83,9 +90,15 @@ public class ClientHandler {
         readBuffer.flip();
 
         // Decode all complete messages in the buffer
-        RespObject obj;
-        while ((obj = decoder.decode(readBuffer)) != null) {
-            processMessage(obj);
+        try {
+            RespObject obj;
+            while ((obj = decoder.decode(readBuffer)) != null) {
+                processMessage(obj);
+            }
+        } catch (IllegalArgumentException e) {
+            logger.warn("Protocol error from client: {}", e.getMessage());
+            sendResponse(RespObject.error("ERR Protocol error: " + e.getMessage()));
+            throw new IOException("Protocol error, closing client", e);
         }
 
         // Compact: move unread bytes to the start, switch back to write mode
@@ -105,28 +118,26 @@ public class ClientHandler {
      */
     public void handleWrite() throws IOException {
         while (true) {
-            // If we have a partially-written buffer, finish it first
             if (currentWriteBuffer != null) {
                 channel.write(currentWriteBuffer);
                 if (currentWriteBuffer.hasRemaining()) {
-                    // Socket buffer is full — we'll continue on the next write-ready cycle
                     return;
                 }
                 currentWriteBuffer = null;
             }
 
-            // Pull the next response from the queue
             byte[] data = writeQueue.poll();
             if (data == null) {
-                // Nothing left to write — stop listening for OP_WRITE
                 selectionKey.interestOps(SelectionKey.OP_READ);
                 return;
             }
 
+            queuedBytes -= data.length;
+
             currentWriteBuffer = ByteBuffer.wrap(data);
             channel.write(currentWriteBuffer);
             if (currentWriteBuffer.hasRemaining()) {
-                return;  // partial write — continue next cycle
+                return;
             }
             currentWriteBuffer = null;
         }
@@ -160,6 +171,12 @@ public class ClientHandler {
      */
     public synchronized void sendResponse(RespObject response) {
         byte[] encoded = encoder.encode(response);
+        queuedBytes += encoded.length;
+        if (queuedBytes > MAX_WRITE_QUEUE_BYTES) {
+            logger.warn("Client write queue exceeded limit ({} bytes), closing", queuedBytes);
+            close();
+            return;
+        }
         writeQueue.add(encoded);
         if (selectionKey.isValid()) {
             selectionKey.interestOps(selectionKey.interestOps() | SelectionKey.OP_WRITE);
@@ -173,7 +190,11 @@ public class ClientHandler {
      * Doubles the read buffer capacity, preserving any unread data.
      */
     private void growReadBuffer() {
-        ByteBuffer newBuffer = ByteBuffer.allocate(readBuffer.capacity() * 2);
+        int newCapacity = readBuffer.capacity() * 2;
+        if (newCapacity > MAX_READ_BUFFER_SIZE || newCapacity < 0) {
+            throw new IllegalArgumentException("Read buffer exceeds maximum size");
+        }
+        ByteBuffer newBuffer = ByteBuffer.allocate(newCapacity);
         readBuffer.flip();
         newBuffer.put(readBuffer);
         readBuffer = newBuffer;

@@ -7,7 +7,7 @@ import com.rexredis.store.RedisValue;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.regex.Pattern;
+
 
 /**
  * Handles KEYS pattern, TYPE key, DBSIZE, and FLUSHDB commands.
@@ -34,12 +34,11 @@ public class KeysHandler implements CommandHandler {
             return RespObject.error("ERR wrong number of arguments for 'keys' command");
         }
 
-        String patternStr = cmd.arg(0);
-        Pattern regex = globToRegex(patternStr);
+        String pattern = cmd.arg(0);
 
         List<RespObject> matchingKeys = new ArrayList<>();
         for (String key : store.keys()) {
-            if (regex.matcher(key).matches()) {
+            if (globMatch(pattern, key)) {
                 matchingKeys.add(RespObject.bulkString(key));
             }
         }
@@ -66,29 +65,75 @@ public class KeysHandler implements CommandHandler {
         return new RespObject.SimpleString(typeStr);
     }
 
-    private Pattern globToRegex(String glob) {
-        StringBuilder sb = new StringBuilder("^");
-        for (int i = 0; i < glob.length(); i++) {
-            char c = glob.charAt(i);
-            switch (c) {
-                case '*' -> sb.append(".*");
-                case '?' -> sb.append(".");
-                case '.', '(', ')', '+', '|', '^', '$', '@', '%', '\\' -> {
-                    sb.append('\\').append(c);
-                }
-                case '[' -> {
-                    int close = glob.indexOf(']', i);
-                    if (close > i) {
-                        sb.append(glob, i, close + 1);
-                        i = close;
-                    } else {
-                        sb.append("\\[");
+    /**
+     * Two-pointer glob matcher supporting *, ?, [...], and \\ escaping.
+     * No regex, so no backtracking bombs or unescaped-character crashes.
+     */
+    private boolean globMatch(String pattern, String text) {
+        int pi = 0, ti = 0;
+        int starPi = -1, starTi = -1;
+
+        while (ti < text.length()) {
+            if (pi < pattern.length() && pattern.charAt(pi) == '\\' && pi + 1 < pattern.length()) {
+                // Escaped character — match literally
+                pi++;
+                if (text.charAt(ti) != pattern.charAt(pi)) return false;
+                pi++;
+                ti++;
+            } else if (pi < pattern.length() && pattern.charAt(pi) == '?') {
+                pi++;
+                ti++;
+            } else if (pi < pattern.length() && pattern.charAt(pi) == '*') {
+                starPi = pi;
+                starTi = ti;
+                pi++;
+            } else if (pi < pattern.length() && pattern.charAt(pi) == '[') {
+                int close = pattern.indexOf(']', pi + 1);
+                if (close < 0) {
+                    // No closing bracket — treat '[' as literal
+                    if (text.charAt(ti) != '[') return false;
+                    pi++;
+                    ti++;
+                } else {
+                    boolean negate = (pi + 1 < close && pattern.charAt(pi + 1) == '^');
+                    int rangeStart = negate ? pi + 2 : pi + 1;
+                    boolean matched = false;
+                    for (int ri = rangeStart; ri < close; ri++) {
+                        if (ri + 2 < close && pattern.charAt(ri + 1) == '-') {
+                            if (text.charAt(ti) >= pattern.charAt(ri) && text.charAt(ti) <= pattern.charAt(ri + 2)) {
+                                matched = true;
+                            }
+                            ri += 2;
+                        } else {
+                            if (text.charAt(ti) == pattern.charAt(ri)) {
+                                matched = true;
+                            }
+                        }
                     }
+                    if (negate) matched = !matched;
+                    if (!matched) {
+                        if (starPi >= 0) {
+                            pi = starPi;
+                            ti = ++starTi;
+                            continue;
+                        }
+                        return false;
+                    }
+                    pi = close + 1;
+                    ti++;
                 }
-                default -> sb.append(c);
+            } else if (pi < pattern.length() && pattern.charAt(pi) == text.charAt(ti)) {
+                pi++;
+                ti++;
+            } else if (starPi >= 0) {
+                pi = starPi;
+                ti = ++starTi;
+            } else {
+                return false;
             }
         }
-        sb.append("$");
-        return Pattern.compile(sb.toString());
+
+        while (pi < pattern.length() && pattern.charAt(pi) == '*') pi++;
+        return pi == pattern.length();
     }
 }

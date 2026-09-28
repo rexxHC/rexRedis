@@ -8,6 +8,7 @@ import com.rexredis.store.RedisValue;
 import java.util.ArrayList;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.ListIterator;
 
 /**
  * Handles List operations: LPUSH, RPUSH, LPOP, RPOP, LLEN, LRANGE.
@@ -151,8 +152,9 @@ public class LpushHandler implements CommandHandler {
         }
 
         List<RespObject> result = new ArrayList<>(stop - start + 1);
-        for (int i = start; i <= stop; i++) {
-            result.add(RespObject.bulkString(list.get(i)));
+        ListIterator<String> it = list.listIterator(start);
+        for (int i = start; i <= stop && it.hasNext(); i++) {
+            result.add(RespObject.bulkString(it.next()));
         }
 
         return RespObject.array(result);

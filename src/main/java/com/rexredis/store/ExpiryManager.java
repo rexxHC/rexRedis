@@ -1,10 +1,12 @@
 package com.rexredis.store;
 
 import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Manages key expiry via lazy and active strategies.
+ *
+ * <p>Thread safety: Accessed exclusively from the event-loop thread.
+ * No concurrent data structures required.
  */
 public class ExpiryManager {
 
@@ -12,7 +14,7 @@ public class ExpiryManager {
     private static final int ACTIVE_EXPIRE_MAX_LOOPS = 10;
 
     /** key → absolute expiry time in milliseconds since epoch */
-    private final Map<String, Long> expiries = new ConcurrentHashMap<>();
+    private final Map<String, Long> expiries = new HashMap<>();
 
     public void setExpiry(String key, long ttlMillis) {
         setAbsoluteExpiry(key, System.currentTimeMillis() + ttlMillis);
@@ -94,10 +96,7 @@ public class ExpiryManager {
 
     /**
      * Active expiry cycle — sample random keys with TTLs and evict expired ones.
-     * Follows Redis active expiration algorithm:
-     * 1. Sample up to 20 keys with expiries.
-     * 2. Evict expired keys.
-     * 3. If >25% were expired, repeat immediately (up to ACTIVE_EXPIRE_MAX_LOOPS times).
+     * Uses random index sampling instead of copying/shuffling the full key set.
      */
     public void activeExpiryCycle(DataStore store) {
         if (expiries.isEmpty()) {
@@ -105,17 +104,24 @@ public class ExpiryManager {
         }
 
         for (int loop = 0; loop < ACTIVE_EXPIRE_MAX_LOOPS; loop++) {
-            List<String> candidateKeys = new ArrayList<>(expiries.keySet());
-            if (candidateKeys.isEmpty()) {
+            // Take a snapshot of keys as an array for random access
+            Object[] keyArray = expiries.keySet().toArray();
+            if (keyArray.length == 0) {
                 break;
             }
 
-            Collections.shuffle(candidateKeys);
-            int countToSample = Math.min(candidateKeys.size(), ACTIVE_EXPIRE_KEYS_PER_LOOP);
+            int countToSample = Math.min(keyArray.length, ACTIVE_EXPIRE_KEYS_PER_LOOP);
             int expiredCount = 0;
+            java.util.concurrent.ThreadLocalRandom rng = java.util.concurrent.ThreadLocalRandom.current();
 
+            // Use Fisher-Yates partial shuffle to pick countToSample unique random keys
             for (int i = 0; i < countToSample; i++) {
-                String key = candidateKeys.get(i);
+                int j = rng.nextInt(i, keyArray.length);
+                Object tmp = keyArray[i];
+                keyArray[i] = keyArray[j];
+                keyArray[j] = tmp;
+
+                String key = (String) keyArray[i];
                 if (isExpired(key)) {
                     store.delete(key);
                     expiredCount++;

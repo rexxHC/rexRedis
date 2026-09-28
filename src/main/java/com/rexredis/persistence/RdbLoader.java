@@ -15,6 +15,11 @@ import java.util.*;
  */
 public class RdbLoader {
 
+    /** Maximum string length from RDB: 64 MB */
+    private static final int MAX_STRING_LENGTH = 64 * 1024 * 1024;
+    /** Maximum collection size from RDB */
+    private static final int MAX_COLLECTION_SIZE = 10_000_000;
+
     /**
      * Loads data from an RDB file into the data store.
      * Skips keys whose stored expiry time is already in the past.
@@ -54,8 +59,12 @@ public class RdbLoader {
             throw new IOException("Unsupported RDB version: " + version);
         }
 
-        // 3. Number of keys
+        // 3. Load into a temporary store for atomic population
+        DataStore tempStore = new DataStore();
         int numKeys = dis.readInt();
+        if (numKeys < 0) {
+            throw new IOException("Invalid key count in RDB: " + numKeys);
+        }
         long now = System.currentTimeMillis();
 
         for (int i = 0; i < numKeys; i++) {
@@ -71,6 +80,9 @@ public class RdbLoader {
                 case RdbSaver.TYPE_STRING -> RedisValue.string(readString(dis));
                 case RdbSaver.TYPE_LIST -> {
                     int count = dis.readInt();
+                    if (count < 0 || count > MAX_COLLECTION_SIZE) {
+                        throw new IOException("Invalid list count in RDB: " + count);
+                    }
                     List<String> list = new ArrayList<>(count);
                     for (int j = 0; j < count; j++) {
                         list.add(readString(dis));
@@ -79,6 +91,9 @@ public class RdbLoader {
                 }
                 case RdbSaver.TYPE_SET -> {
                     int count = dis.readInt();
+                    if (count < 0 || count > MAX_COLLECTION_SIZE) {
+                        throw new IOException("Invalid set count in RDB: " + count);
+                    }
                     Set<String> set = new LinkedHashSet<>(count);
                     for (int j = 0; j < count; j++) {
                         set.add(readString(dis));
@@ -87,6 +102,9 @@ public class RdbLoader {
                 }
                 case RdbSaver.TYPE_HASH -> {
                     int count = dis.readInt();
+                    if (count < 0 || count > MAX_COLLECTION_SIZE) {
+                        throw new IOException("Invalid hash count in RDB: " + count);
+                    }
                     Map<String, String> map = new LinkedHashMap<>(count);
                     for (int j = 0; j < count; j++) {
                         String field = readString(dis);
@@ -103,23 +121,32 @@ public class RdbLoader {
                 continue;
             }
 
-            store.set(key, val);
+            tempStore.set(key, val);
             if (expiryMs != null) {
-                store.getExpiryManager().setAbsoluteExpiry(key, expiryMs);
+                tempStore.getExpiryManager().setAbsoluteExpiry(key, expiryMs);
             }
         }
 
-        // EOF marker
+        // EOF marker — validates the file is complete
         byte eof = dis.readByte();
         if (eof != RdbSaver.EOF_MARKER) {
             throw new IOException("Corrupted RDB file: missing EOF marker (found: " + eof + ")");
+        }
+
+        // Only populate the real store after successful validation
+        for (Map.Entry<String, RedisValue> entry : tempStore.getAll().entrySet()) {
+            store.set(entry.getKey(), entry.getValue());
+            Long expiry = tempStore.getExpiryManager().getExpiry(entry.getKey());
+            if (expiry != null) {
+                store.getExpiryManager().setAbsoluteExpiry(entry.getKey(), expiry);
+            }
         }
     }
 
     private String readString(DataInputStream dis) throws IOException {
         int length = dis.readInt();
-        if (length < 0) {
-            throw new IOException("Invalid string length in RDB: " + length);
+        if (length < 0 || length > MAX_STRING_LENGTH) {
+            throw new IOException("Invalid or excessive string length in RDB: " + length);
         }
         byte[] bytes = new byte[length];
         dis.readFully(bytes);

@@ -24,6 +24,11 @@ import java.util.List;
  */
 public class RespDecoder {
 
+    /** Maximum bulk string size: 512 MB (matches Redis limit) */
+    private static final int MAX_BULK_STRING_LENGTH = 512 * 1024 * 1024;
+    /** Maximum array element count */
+    private static final int MAX_ARRAY_COUNT = 1_048_576;
+
     /**
      * Attempts to decode the next complete RespObject from the buffer.
      * The buffer must be in read mode (after {@code flip()}).
@@ -36,6 +41,11 @@ public class RespDecoder {
         if (!buffer.hasRemaining()) {
             return null;
         }
+
+        // TODO Bug 12: This decoder re-parses from the start on every partial read.
+        // A large payload arriving in small chunks costs O(n²) total work.
+        // Fix: refactor to a state-machine parser that remembers its position,
+        // or check that the full frame length is available before parsing.
 
         int savedPosition = buffer.position();
         try {
@@ -93,6 +103,10 @@ public class RespDecoder {
             throw new IllegalArgumentException("Invalid bulk string length: " + length);
         }
 
+        if (length > MAX_BULK_STRING_LENGTH) {
+            throw new IllegalArgumentException("Bulk string length exceeds limit: " + length);
+        }
+
         // Read exactly 'length' bytes
         if (buffer.remaining() < length + 2) {  // +2 for trailing \r\n
             throw new BufferUnderflowException();
@@ -123,6 +137,10 @@ public class RespDecoder {
 
         if (count < 0) {
             throw new IllegalArgumentException("Invalid array count: " + count);
+        }
+
+        if (count > MAX_ARRAY_COUNT) {
+            throw new IllegalArgumentException("Array count exceeds limit: " + count);
         }
 
         List<RespObject> elements = new ArrayList<>(count);

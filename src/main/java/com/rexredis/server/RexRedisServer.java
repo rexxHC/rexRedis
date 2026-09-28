@@ -49,6 +49,7 @@ public class RexRedisServer {
     private volatile boolean running = false;
     private int boundPort;
     private final java.util.concurrent.CountDownLatch startupLatch = new java.util.concurrent.CountDownLatch(1);
+    private Thread loopThread;
 
     public RexRedisServer(ServerConfig config) {
         this.config = config;
@@ -69,6 +70,7 @@ public class RexRedisServer {
             startupLatch.countDown();
             logger.info("RexRedis is ready to accept connections on port {}", boundPort);
 
+            this.loopThread = Thread.currentThread();
             eventLoop();
         } catch (IOException e) {
             startupLatch.countDown();
@@ -120,15 +122,14 @@ public class RexRedisServer {
     private void registerShutdownHook() {
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             logger.info("Shutdown hook triggered — stopping RexRedis");
-            if (config.isPersistenceEnabled()) {
-                try {
-                    new com.rexredis.persistence.RdbSaver().save(dataStore, config.getRdbFilename());
-                    logger.info("Saved RDB snapshot on shutdown to {}", config.getRdbFilename());
-                } catch (IOException e) {
-                    logger.error("Failed to save RDB snapshot on shutdown", e);
-                }
-            }
             stop();
+            try {
+                if (loopThread != null) {
+                    loopThread.join(5000);
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
         }, "rexredis-shutdown"));
     }
 
@@ -153,6 +154,15 @@ public class RexRedisServer {
         }
 
         cleanup();
+
+        if (config.isPersistenceEnabled()) {
+            try {
+                new com.rexredis.persistence.RdbSaver().save(dataStore, config.getRdbFilename());
+                logger.info("Saved RDB snapshot on shutdown to {}", config.getRdbFilename());
+            } catch (IOException e) {
+                logger.error("Failed to save RDB snapshot on shutdown", e);
+            }
+        }
     }
 
     private void processSelectedKeys() {
@@ -179,6 +189,9 @@ public class RexRedisServer {
                 }
             } catch (IOException e) {
                 logger.debug("Client disconnected: {}", e.getMessage());
+                closeClient(key);
+            } catch (RuntimeException e) {
+                logger.warn("Error processing client request: {}", e.getMessage());
                 closeClient(key);
             }
         }

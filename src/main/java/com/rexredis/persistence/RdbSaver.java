@@ -80,17 +80,24 @@ public class RdbSaver {
         dos.write(MAGIC);
         dos.writeByte(VERSION);
 
-        // Gather active, non-expired keys
-        Set<String> activeKeys = store.keys();
+        // Build a consistent snapshot of live entries in a single pass
+        // to prevent count/data mismatch from keys expiring between calls
         ExpiryManager expiryManager = store.getExpiryManager();
+        record SnapshotEntry(String key, RedisValue value, Long expiryMs) {}
+        List<SnapshotEntry> liveEntries = new ArrayList<>();
 
-        dos.writeInt(activeKeys.size());
-
-        for (String key : activeKeys) {
+        for (String key : store.keys()) {
             RedisValue val = store.get(key);
-            if (val == null) {
-                continue;
+            if (val != null) {
+                Long expiry = expiryManager.hasExpiry(key) ? expiryManager.getExpiry(key) : null;
+                liveEntries.add(new SnapshotEntry(key, val, expiry));
             }
+        }
+
+        dos.writeInt(liveEntries.size());
+
+        for (var entry : liveEntries) {
+            RedisValue val = entry.value();
 
             // Type
             byte typeByte = switch (val.getType()) {
@@ -102,14 +109,14 @@ public class RdbSaver {
             dos.writeByte(typeByte);
 
             // Expiry
-            boolean hasExpiry = expiryManager.hasExpiry(key);
+            boolean hasExpiry = entry.expiryMs() != null;
             dos.writeByte(hasExpiry ? 1 : 0);
             if (hasExpiry) {
-                dos.writeLong(expiryManager.getExpiry(key));
+                dos.writeLong(entry.expiryMs());
             }
 
             // Key
-            writeString(dos, key);
+            writeString(dos, entry.key());
 
             // Value
             switch (val.getType()) {
@@ -131,9 +138,9 @@ public class RdbSaver {
                 case HASH -> {
                     Map<String, String> map = val.asHash();
                     dos.writeInt(map.size());
-                    for (Map.Entry<String, String> entry : map.entrySet()) {
-                        writeString(dos, entry.getKey());
-                        writeString(dos, entry.getValue());
+                    for (Map.Entry<String, String> me : map.entrySet()) {
+                        writeString(dos, me.getKey());
+                        writeString(dos, me.getValue());
                     }
                 }
             }
