@@ -1,4 +1,4 @@
-# 🦖 RexRedis
+# RexRedis
 
 A Redis clone built from scratch in Java using raw NIO.
 
